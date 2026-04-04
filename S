@@ -1,0 +1,31 @@
+#!/bin/bash
+
+echo "🔍 Checking Mailcow services..."
+
+cd ~/mailcow-dockerized
+
+# Restart if nginx is down
+if ! curl -s http://localhost | grep -q "mailcow"; then
+  echo "⚠️ Nginx not responding → restarting"
+  docker compose restart nginx-mailcow
+fi
+
+# Check SMTP port
+if ! nc -z localhost 25; then
+  echo "⚠️ SMTP down → restarting postfix"
+  docker compose restart postfix-mailcow
+fi
+
+# Check IMAP
+if ! nc -z localhost 993; then
+  echo "⚠️ IMAP down → restarting dovecot"
+  docker compose restart dovecot-mailcow
+fi
+
+# Restart all if critical failure
+if ! docker ps | grep -q mailcowdockerized-nginx-mailcow; then
+  echo "🔥 Critical failure → restarting ALL"
+  docker compose up -d
+fi
+
+echo "✅ Check complete"
