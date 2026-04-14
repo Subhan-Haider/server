@@ -1,0 +1,223 @@
+const express = require("express");
+const multer = require("multer");
+const cors = require("cors");
+const fs = require("fs");
+const path = require("path");
+const rateLimit = require("express-rate-limit");
+
+const app = express();
+
+// =========================
+// CONFIG
+// =========================
+const PORT = 5000;
+const UPLOAD_PATH = "/var/www/storage/uploads";
+const BASE_URL = "https://storage.lootops.me/uploads";
+const API_KEY = process.env.STORAGE_API_KEY || "sh202620252009sh";
+
+// Create upload folder automatically
+if (!fs.existsSync(UPLOAD_PATH)) {
+  fs.mkdirSync(UPLOAD_PATH, { recursive: true });
+}
+
+// =========================
+// MIDDLEWARE
+// =========================
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Rate limit upload endpoint
+const uploadLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 20,
+  message: {
+    error: "Too many upload requests. Please wait 1 minute."
+  }
+});
+
+// API key protection
+function checkAuth(req, res, next) {
+  const token = req.headers.authorization;
+
+  if (!token || token !== API_KEY) {
+    return res.status(403).json({
+      error: "Unauthorized"
+    });
+  }
+
+  next();
+}
+
+// =========================
+// FILE STORAGE
+// =========================
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, UPLOAD_PATH);
+  },
+
+  filename: (req, file, cb) => {
+    const safeName = file.originalname
+      .replace(/[^a-zA-Z0-9.\-_]/g, "_");
+
+    cb(null, `${Date.now()}-${safeName}`);
+  }
+});
+
+// Allowed file types
+const allowedTypes = [
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/gif",
+  "text/plain",
+  "text/html",
+  "application/pdf"
+];
+
+const upload = multer({
+  storage,
+
+  limits: {
+    fileSize: 20 * 1024 * 1024 // 20MB
+  },
+
+  fileFilter: (req, file, cb) => {
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(
+        new Error(
+          "Only PNG, JPG, WEBP, GIF, TXT, HTML, and PDF files are allowed."
+        )
+      );
+    }
+
+    cb(null, true);
+  }
+});
+
+// =========================
+// ROUTES
+// =========================
+
+// Health check
+app.get("/", (req, res) => {
+  res.send(`
+    <h1>🚀 Lootops Storage Server Running</h1>
+    <p>Upload endpoint: POST /upload</p>
+    <p>Files endpoint: GET /files</p>
+  `);
+});
+
+// Upload file
+app.post(
+  "/upload",
+  uploadLimiter,
+  checkAuth,
+  upload.single("file"),
+  (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          error: "No file uploaded"
+        });
+      }
+
+      res.json({
+        success: true,
+        filename: req.file.filename,
+        originalName: req.file.originalname,
+        size: req.file.size,
+        type: req.file.mimetype,
+        url: `${BASE_URL}/${req.file.filename}`
+      });
+    } catch (err) {
+      console.error(err);
+
+      res.status(500).json({
+        error: "Upload failed"
+      });
+    }
+  }
+);
+
+// List uploaded files
+app.get("/files", checkAuth, (req, res) => {
+  fs.readdir(UPLOAD_PATH, (err, files) => {
+    if (err) {
+      return res.status(500).json({
+        error: "Could not read upload folder"
+      });
+    }
+
+    const fileList = files.map((file) => {
+      const fullPath = path.join(UPLOAD_PATH, file);
+      const stats = fs.statSync(fullPath);
+
+      return {
+        filename: file,
+        size: stats.size,
+        created: stats.birthtime,
+        url: `${BASE_URL}/${file}`
+      };
+    });
+
+    res.json({
+      success: true,
+      total: fileList.length,
+      files: fileList
+    });
+  });
+});
+
+// Delete file
+app.delete("/delete/:filename", checkAuth, (req, res) => {
+  const filename = req.params.filename;
+  const filePath = path.join(UPLOAD_PATH, filename);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({
+      error: "File not found"
+    });
+  }
+
+  fs.unlink(filePath, (err) => {
+    if (err) {
+      return res.status(500).json({
+        error: "Could not delete file"
+      });
+    }
+
+    res.json({
+      success: true,
+      deleted: filename
+    });
+  });
+});
+
+// =========================
+// ERROR HANDLING
+// =========================
+app.use((err, req, res, next) => {
+  console.error(err);
+
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({
+      error: err.message
+    });
+  }
+
+  res.status(400).json({
+    error: err.message || "Unknown error"
+  });
+});
+
+// =========================
+// START SERVER
+// =========================
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Lootops storage server running on port ${PORT}`);
+  console.log(`📁 Upload folder: ${UPLOAD_PATH}`);
+  console.log(`🌍 Base URL: ${BASE_URL}`);
+});
