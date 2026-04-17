@@ -1,0 +1,175 @@
+const express = require("express");
+const multer = require("multer");
+const cors = require("cors");
+const fs = require("fs");
+const path = require("path");
+const morgan = require("morgan");
+
+const app = express();
+
+/* ---------------------------
+   BASIC SECURITY / PROXY
+---------------------------- */
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+
+/* ---------------------------
+   MIDDLEWARE
+---------------------------- */
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST"],
+}));
+
+app.use(express.json());
+app.use(morgan("dev"));
+
+/* ---------------------------
+   CONFIG
+---------------------------- */
+const PORT = 5000;
+const HOST = "0.0.0.0";
+
+const API_KEY = "sh202620252009sh";
+
+const UPLOAD_PATH = "/var/www/storage/uploads";
+const BASE_URL = "https://storage.lootops.me/uploads";
+
+/* ---------------------------
+   CREATE UPLOAD FOLDER
+---------------------------- */
+if (!fs.existsSync(UPLOAD_PATH)) {
+  fs.mkdirSync(UPLOAD_PATH, { recursive: true });
+}
+
+/* ---------------------------
+   SERVE STATIC FILES
+   (FIXES: Cannot GET /uploads)
+---------------------------- */
+app.use("/uploads", express.static(UPLOAD_PATH, {
+  maxAge: "1d",
+  etag: true,
+}));
+
+/* ---------------------------
+   AUTH MIDDLEWARE
+---------------------------- */
+function checkAuth(req, res, next) {
+  const token = req.headers.authorization;
+
+  if (!token || token !== API_KEY) {
+    return res.status(403).json({
+      success: false,
+      error: "Unauthorized"
+    });
+  }
+
+  next();
+}
+
+/* ---------------------------
+   MULTER STORAGE CONFIG
+---------------------------- */
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, UPLOAD_PATH);
+  },
+
+  filename: (req, file, cb) => {
+    const safeName = file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+    cb(null, Date.now() + "-" + safeName);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB
+  },
+});
+
+/* ---------------------------
+   ROUTES
+---------------------------- */
+
+// Health check
+app.get("/api/health", (req, res) => {
+  res.json({
+    success: true,
+    status: "running",
+    service: "storage-server"
+  });
+});
+
+// Upload file
+app.post("/upload", checkAuth, upload.single("file"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      error: "No file uploaded"
+    });
+  }
+
+  return res.json({
+    success: true,
+    url: `${BASE_URL}/${req.file.filename}`,
+    filename: req.file.filename,
+    size: req.file.size,
+    mimetype: req.file.mimetype
+  });
+});
+
+// List files
+app.get("/files", (req, res) => {
+  fs.readdir(UPLOAD_PATH, (err, files) => {
+    if (err) {
+      return res.status(500).json({
+        success: false,
+        error: "Cannot read files"
+      });
+    }
+
+    const formatted = files.map(file => ({
+      name: file,
+      url: `${BASE_URL}/${file}`
+    }));
+
+    res.json({
+      success: true,
+      count: files.length,
+      files: formatted
+    });
+  });
+});
+
+// Root route (IMPORTANT FOR DEBUGGING)
+app.get("/", (req, res) => {
+  const host = req.hostname;
+
+  if (host === "storage.lootops.me") {
+    return res.send("🚀 Storage Server Running");
+  }
+
+  if (host === "api.lootops.me") {
+    return res.send("🚀 API Server Running");
+  }
+
+  return res.send("Server is running");
+});
+
+/* ---------------------------
+   404 HANDLER
+---------------------------- */
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: "Route not found"
+  });
+});
+
+/* ---------------------------
+   START SERVER
+---------------------------- */
+app.listen(PORT, HOST, () => {
+  console.log(`🚀 Storage server running on http://${HOST}:${PORT}`);
+});
