@@ -1,0 +1,88 @@
+const express = require("express");
+const multer = require("multer");
+const cors = require("cors");
+const path = require("path");
+
+const app = express();
+
+app.use(cors());
+
+// 🔐 YOUR API KEY
+const API_KEY = "sh202620252009sh";
+
+// 📁 STORAGE PATH (IMPORTANT)
+const UPLOAD_PATH = "/var/www/storage/uploads";
+
+// 🌍 DOMAIN BASE URL (CHANGE IF NEEDED)
+const BASE_URL = "https://storage.lootops.me/uploads";
+
+// 🔐 AUTH MIDDLEWARE
+function checkAuth(req, res, next) {
+  const token = req.headers.authorization;
+
+  if (!token || token !== API_KEY) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+
+  next();
+}
+
+// 📦 SAFE MULTER STORAGE CONFIG
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, UPLOAD_PATH);
+  },
+
+  filename: (req, file, cb) => {
+    // ✅ Remove unsafe characters (FIXES YOUR ISSUE)
+    const safeName = file.originalname
+      .replace(/[^a-zA-Z0-9.\-_]/g, "_");
+
+    cb(null, Date.now() + "-" + safeName);
+  },
+});
+
+// 📤 UPLOAD CONFIG
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 20 * 1024 * 1024, // 20MB limit
+  },
+});
+
+// 🚀 UPLOAD ROUTE (SECURED)
+app.post("/upload", checkAuth, upload.single("file"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "No file uploaded" });
+  }
+
+  res.json({
+    url: `${BASE_URL}/${req.file.filename}`,
+    filename: req.file.filename,
+    size: req.file.size,
+    type: req.file.mimetype,
+  });
+});
+
+// 📁 SIMPLE FILE LIST (OPTIONAL ADMIN USE)
+app.get("/files", (req, res) => {
+  const fs = require("fs");
+
+  fs.readdir(UPLOAD_PATH, (err, files) => {
+    if (err) {
+      return res.status(500).json({ error: "Cannot read files" });
+    }
+
+    res.json({ files });
+  });
+});
+
+// 🧪 HEALTH CHECK
+app.get("/", (req, res) => {
+  res.send("🚀 Storage server running successfully");
+});
+
+// 🚀 START SERVER
+app.listen(5000, "0.0.0.0", () => {
+  console.log("🚀 Server running on port 5000");
+});
